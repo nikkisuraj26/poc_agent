@@ -1,0 +1,21 @@
+[project]
+name = "poc-agent"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.13"
+dependencies = [
+    "arize-phoenix>=15.3.0",
+    "fastapi>=0.136.1",
+    "langchain>=1.2.17",
+    "langchain-google-genai>=2.0.0",
+    "langgraph>=1.1.10",
+    "openinference-instrumentation-langchain>=0.1.63",
+    "opentelemetry-api>=1.39.1",
+    "opentelemetry-exporter-otlp>=1.39.1",
+    "opentelemetry-sdk>=1.39.1",
+    "phoenix>=0.9.1",
+    "pydantic>=2.13.3",
+    "python-dotenv>=1.2.2",
+    "uvicorn>=0.46.0",
+]

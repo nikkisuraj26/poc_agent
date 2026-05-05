@@ -1,0 +1,13 @@
+arize-phoenix
+opentelemetry-api
+opentelemetry-sdk
+opentelemetry-exporter-otlp
+openinference-instrumentation-langchain
+langchain>=0.2.0
+langchain-google-genai>=1.0.6
+google-generativeai>=0.7.0
+langgraph
+fastapi
+uvicorn
+pydantic
+python-dotenv

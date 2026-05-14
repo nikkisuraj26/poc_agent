@@ -198,7 +198,44 @@ By aligning with OTel + OpenInference + Phoenix, we gain access to a broader eco
 We can incrementally extend our instrumentation (new tools, new evals) without changing the underlying stack.
 
 ---
+```text
+User: "3 days in Tokyo, love food & history, low budget"
+                    ↓
+┌─────────────────────────────────────────────────────┐
+│ parse_request_node  (CHAIN)                         │
+│  → extracts: city, days, budget, interests, pace    │
+│  → state["parsed_request"] = {city: "Tokyo", ...}   │
+└─────────────────────────────────────────────────────┘
+                    ↓
+┌─────────────────────────────────────────────────────┐
+│ planner_node  (AGENT)                               │
+│  → generates day-by-day activity names              │
+│  → state["itinerary"] = [{day:1, activities:[...]}] │
+└─────────────────────────────────────────────────────┘
+                    ↓
+┌─────────────────────────────────────────────────────┐
+│ enricher_node  (CHAIN)                              │
+│  → adds one-line description to each activity       │
+│  → state["itinerary"] = [{day:1, activities:        │
+│      [{name: "...", details: "..."}]}]              │
+└─────────────────────────────────────────────────────┘
+                    ↓
+┌─────────────────────────────────────────────────────┐
+│ validator_node  (CHAIN)                             │
+│  → formats everything into readable text            │
+│  → state["final_response"] = "### Final Itinerary"  │
+└─────────────────────────────────────────────────────┘
+                    ↓
+         User sees final itinerary ✅
+```
+## Observability UI options
 
-
-
-
+| Tool / UI     | Type & hosting model                                      | OpenTelemetry / standards fit                                                | Main strengths                                                                 | Main trade‑offs                                                                | When to use it                                                                |
+| ------------- | --------------------------------------------------------- | ---------------------------------------------------------------------------- | ------------------------------------------------------------------------------ | ------------------------------------------------------------------------------ | ----------------------------------------------------------------------------- |
+| Phoenix       | Open‑source AI observability & eval UI; self‑host or local | Built on OpenTelemetry and OpenInference; consumes existing spans directly  | Deep LLM/agent semantics, datasets, evals, prompt playground, RAG‑aware traces | Less “SaaS‑polished” for org‑wide governance and admin than some hosted tools | Default when you already emit OTel + OpenInference and want an AI‑centric UI |
+| Langfuse      | Open‑source LLM tracing & eval with hosted and self‑host  | Ingests OTLP; follows GenAI OTel conventions rather than full OpenInference | Polished SaaS UI, cost/latency metrics, prompt versioning, eval workflows      | May need mapping from your OpenInference attributes; becomes a second main UI  | When you want a managed, OTel‑aware LLM observability product                |
+| OpenLLMetry + APM (Datadog / Grafana / New Relic / Dynatrace) | OTel extension feeding LLM traces into existing APM UI      | Emits standard OTLP traces; fits cleanly into OTel Collector pipelines        | Single pane of glass for infra + LLM spans in tools SRE/DevOps already use     | Generic APM UIs lack AI‑specific evals, datasets, and prompt playgrounds      | When you want minimal tool sprawl and basic LLM visibility in your APM       |
+| Helicone      | Open‑source / SaaS LLM gateway with observability UI      | Logs via proxy/SDK, separate from your OTel/OpenInference pipeline          | Very easy to adopt; strong cost, latency, and per‑user/model metrics           | Separate logging channel; fewer deep eval and dataset features                 | When you mainly want quick cost and reliability visibility across providers  |
+| LangSmith     | Commercial tracing & eval for LangChain/LangGraph         | SDK‑based; not a general OTel backend                                       | Rich graph view for LangChain apps, multi‑turn and online evals, prompt debug  | Creates a second tracing stack; focused on LangChain ecosystem                 | When your agents are heavily built on LangChain/LangGraph                    |
+| W&B Weave     | LLM tracing & eval inside Weights & Biases platform       | Weave connectors; traces go to W&B, separate from OTel                       | Great if you already use W&B; unified ML + LLM experiment tracking and evals   | Another parallel system; more ML‑platform‑oriented than pure observability     | When your org standardizes on W&B and wants observability there              |
+| MLflow        | Open‑source AI/ML platform with tracing, evals, and UI    | OpenTelemetry‑compatible tracing; integrates with many LLM/agent libraries  | One‑line autolog for LLMs/agents, strong eval UI, AI Gateway, no vendor lock‑in | Broader MLOps platform to operate; overlap with existing observability tools   | When you already use MLflow or want a unified MLOps + LLM observability stack |

@@ -2,7 +2,8 @@ import os
 import json
 from typing import TypedDict, List
 
-from fastapi import FastAPI
+from datetime import datetime, timedelta # New import for date handling
+from fastapi import FastAPI # Existing import
 import time
 import logging
 import uvicorn
@@ -23,6 +24,7 @@ from opentelemetry.exporter.otlp.proto.http._log_exporter import OTLPLogExporter
 from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
 from openinference.instrumentation.langchain import LangChainInstrumentor
 from openinference.semconv.trace import SpanAttributes, OpenInferenceSpanKindValues
+import requests # New import for making HTTP requests
 #These enable distributed tracing:
 # capture every step of the agent
 # send traces to Phoenix UI for visualization and analysis
@@ -81,7 +83,8 @@ LangChainInstrumentor().instrument()
 class AgentState(TypedDict):
   user_request: str
   parsed_request: dict
-  itinerary: List[dict] # Changed to List[dict] for clarity
+  weather_forecast: str # Added to store weather information
+  itinerary: List[dict]
   final_response: str
 
 
@@ -94,6 +97,11 @@ else:
 api_key = os.getenv("GOOGLE_API_KEY")
 if not api_key:
   raise ValueError("GOOGLE_API_KEY not found. Please ensure your 'env' file contains GOOGLE_API_KEY=your_key")
+
+# New: Load OpenWeatherMap API key
+openweather_api_key = os.getenv("OPENWEATHER_API_KEY")
+if not openweather_api_key:
+  logger.warning("OPENWEATHER_API_KEY not found. Weather tool will return mock data or error.")
 
 print(f"Initializing Agent with model: gemini-2.5-flash")
 # Explicitly using the stable model name
@@ -108,17 +116,90 @@ def search_city_info(city: str, topic: str) -> str:
   time.sleep(0.5) # Simulate network latency
   return f"Found detailed external info: The best {topic} experiences in {city} are highly rated by locals."
 
+# --- New Tool for Weather Information (Real API) ---
+@tool
+def get_weather_info(city: str, date: str) -> str:
+    """Retrieves weather information for a city on a specific date using OpenWeatherMap API."""
+    logger.info(f"Using OpenWeatherMap API for weather in {city} on {date}...")
+    api_key = os.getenv("OPENWEATHER_API_KEY")
+    if not api_key:
+        logger.error("OPENWEATHER_API_KEY not found. Cannot retrieve real weather data.")
+        return "Weather information is currently unavailable due to missing API key."
+
+    base_url = "https://api.openweathermap.org/data/2.5/forecast" # 5-day / 3-hour forecast
+    params = {
+        "q": city,
+        "appid": api_key,
+        "units": "metric" # For Celsius
+    }
+
+    try:
+        response = requests.get(base_url, params=params)
+        response.raise_for_status() # Raise an exception for HTTP errors
+        data = response.json()
+
+        if data.get("cod") != "200":
+            logger.warning(f"OpenWeatherMap API returned an error for {city}: {data.get('message', 'Unknown error')}")
+            return f"Could not retrieve weather for {city}. Reason: {data.get('message', 'City not found or API issue')}."
+
+        forecast_list = data.get("list", [])
+        if not forecast_list:
+            return f"No forecast data available for {city}."
+
+        target_date = datetime.strptime(date, '%Y-%m-%d').date()
+        
+        closest_forecast = None
+        min_time_diff = timedelta.max
+
+        for forecast_entry in forecast_list:
+            forecast_dt_str = forecast_entry.get("dt_txt")
+            if forecast_dt_str:
+                forecast_datetime = datetime.strptime(forecast_dt_str, '%Y-%m-%d %H:%M:%S')
+                if forecast_datetime.date() == target_date:
+                    # Calculate difference from midnight of the target date for consistency
+                    time_diff = abs(forecast_datetime - datetime.combine(target_date, datetime.min.time()))
+                    if time_diff < min_time_diff:
+                        min_time_diff = time_diff
+                        closest_forecast = forecast_entry
+        
+        if closest_forecast:
+            main_data = closest_forecast.get("main", {})
+            weather_data = closest_forecast.get("weather", [{}])[0]
+            
+            temp = main_data.get("temp")
+            feels_like = main_data.get("feels_like")
+            description = weather_data.get("description")
+            
+            return (
+                f"The weather in {city} on {date} is expected to be {description} "
+                f"with a temperature of {temp}°C (feels like {feels_like}°C)."
+            )
+        else:
+            return f"No specific forecast found for {city} on {date} within the available data."
+
+    except requests.exceptions.RequestException as e:
+        logger.error(f"Network or API error when fetching weather for {city}: {e}")
+        return "Weather information is currently unavailable due to a network issue."
+    except Exception as e:
+        logger.error(f"An unexpected error occurred while processing weather data for {city}: {e}")
+        return "Weather information is currently unavailable due to an unexpected error."
+
 def parse_request_node(state: AgentState):
   with tracer.start_as_current_span("parse_request") as span: # we are saying track everything that is happening inside this function as part of the "parse_request" step in our agent's execution
     span.set_attribute(SpanAttributes.OPENINFERENCE_SPAN_KIND, OpenInferenceSpanKindValues.CHAIN.value)
     logger.info(f"Parsing user request: {state['user_request']}")
     span.add_event("Executing parse_request LLM call")
     
-    prompt = f"Extract trip details from: '{state['user_request']}'. Return JSON: city, days (int), budget, interests (list), pace."
+    prompt = f"Extract trip details from: '{state['user_request']}'. Return JSON: city, days (int), budget, interests (list), pace, date (YYYY-MM-DD format, if specified, otherwise null)."
     response = llm.invoke([SystemMessage(content="You are a parser."), HumanMessage(content=prompt)])
     # Basic cleaning of LLM output for JSON parsing
     content = response.content.replace("```json", "").replace("```", "").strip()
     parsed = json.loads(content)
+    
+    # Ensure 'date' is always present, default to today if null
+    if parsed.get('date') is None:
+        parsed['date'] = datetime.now().strftime('%Y-%m-%d')
+    
     span.set_attribute("output.value", json.dumps(parsed))
     span.add_event("Parsing complete", attributes={"parsed_keys": str(list(parsed.keys()))})
     return {"parsed_request": parsed}
@@ -143,6 +224,14 @@ def enricher_node(state: AgentState):
     span.set_attribute(SpanAttributes.OPENINFERENCE_SPAN_KIND, OpenInferenceSpanKindValues.CHAIN.value)
     logger.info("Enriching itinerary activities with descriptions")
     enriched = []
+    city = state['parsed_request']['city']
+    trip_date_str = state['parsed_request'].get('date')
+
+    # Call the real weather tool and store its output in the state
+    if trip_date_str:
+      weather_forecast = get_weather_info.invoke({"city": city, "date": trip_date_str})
+      state['weather_forecast'] = weather_forecast
+      span.add_event("Weather information retrieved", attributes={"weather_data": weather_forecast})
     for day_data in state['itinerary']:
       day_plan = {"day": day_data['day'], "activities": []}
       for act in day_data['activities']:
@@ -162,7 +251,11 @@ def validator_node(state: AgentState):
     logger.info("Validating and formatting final response")
     itinerary = state['itinerary']
     city = state['parsed_request']['city']
+    weather_forecast = state.get('weather_forecast') # Retrieve weather forecast from state
     output = f"### Final Itinerary for {city} ###\n"
+    if weather_forecast:
+        output += f"Weather forecast for your trip: {weather_forecast}\n"
+    output += "\n"
     for d in itinerary:
       output += f"\nDay {d['day']}:\n" + "\n".join([f"- {a['name']}: {a['details']}" for a in d['activities']])
     span.set_attribute("output.value", output)

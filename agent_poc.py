@@ -261,9 +261,19 @@ def enricher_node(state: AgentState):
         for day_data in state['itinerary']:
             day_plan = {"day": day_data['day'], "activities": []}
             for act in day_data['activities']:
-                external_info = search_city_info.invoke({"city": city, "topic": act})
-                desc = llm.invoke([HumanMessage(content=f"Based on this info: '{external_info}', write a 1 line description for {act}.")]).content
-                day_plan['activities'].append({"name": act, "details": desc})
+                
+                # --- THE FIX: Sanitize LLM Output ---
+                # If the LLM generated a dict instead of a string, extract the text
+                if isinstance(act, dict):
+                    # Try to grab common keys LLMs use, otherwise convert the whole dict to a string
+                    topic_str = act.get('name', act.get('activity', act.get('title', str(act))))
+                else:
+                    topic_str = str(act)
+                # ------------------------------------
+
+                external_info = search_city_info.invoke({"city": city, "topic": topic_str})
+                desc = llm.invoke([HumanMessage(content=f"Based on this info: '{external_info}', write a 1 line description for {topic_str}.")]).content
+                day_plan['activities'].append({"name": topic_str, "details": desc})
             enriched.append(day_plan)
             
         return {"itinerary": enriched}
